@@ -9,7 +9,7 @@ $| = 1;
 # TODO:  Add words/phrases to be capitalized/uppercased
 #
 
-my $usage = "\nUsage: inputFile outputFile [-operations operations-comma-separated] [-capitalize files] [-spellfixes files] -datafiles dir] [-showOps] [-trace] [-linebreak] [-help] [-usage]\n";
+my $usage = "\nUsage: [inputFile] [outputFile] [-operations operations-comma-separated] [-capitalize files] [-spellfixes files] -datafiles dir] [-showOps] [-trace] [-linebreak] [-help] [-usage]\n";
 
 my $SEP = "[^a-zA-Z0-9]*";
 
@@ -420,8 +420,8 @@ sub parseOperations {
 sub printHelpAndExit {
   printf STDERR "$usage\n";
   printf STDERR "Args:\n\n";
-  printf STDERR "inputFile    Input file of sentences to be transformed, one sentence per line\n";
-  printf STDERR "outputFile   Output file of transformed sentences, one sentence per line\n";
+  printf STDERR "inputFile    Input file of sentences to be transformed, one sentence per line.  Inputs from stdin if this file is not provided. \n";
+  printf STDERR "outputFile   Output file of transformed sentences, one sentence per line. Outputs to stdin if this file is not provided.\n";
   printf STDERR "-operations  Comma-separated list of operation names to use. The token 'all' means all operations. Prefixing an operation name with a '!' means don't use it\n";
   printf STDERR "-capitalize  Comma-separated list of files which contain 'capitalization forms' like 'Mary', 'Palm Springs', and 'NYC',etc.\n";
   printf STDERR "-spellfixes  Comma-separated list of files which contain spell fixes like 'gentalmen => gentlemen'.\n";
