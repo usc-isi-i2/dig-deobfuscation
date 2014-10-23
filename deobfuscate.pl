@@ -9,7 +9,7 @@ $| = 1;
 # TODO:  Add words/phrases to be capitalized/uppercased
 #
 
-my $usage = "\nUsage: inputFile outputFile [-operations operations-comma-separated] [-capitalize files] [-spellfixes files] [-showOps] [-trace] [-linebreak] [-help] [-usage]\n";
+my $usage = "\nUsage: inputFile outputFile [-operations operations-comma-separated] [-capitalize files] [-spellfixes files] -datafiles dir] [-showOps] [-trace] [-linebreak] [-help] [-usage]\n";
 
 my $SEP = "[^a-zA-Z0-9]*";
 
@@ -29,6 +29,7 @@ my $traceOps = 0;
 my $helpRequested;
 my $usageRequested;
 my $showOps;
+my $dataFilesDir;
 my $addLineBreaks;
 my $keyMode;
 
@@ -47,6 +48,7 @@ GetOptions("operations:s" => \$operations,
 	   "showOps" => \$showOps,
 	   "capitalize:s" => \$capitalFormsFiles,
 	   "spellfixes:s" => \$spellfixFiles,
+	   "datafiles:s" => \$dataFilesDir,
 	   "trace" => \$traceOps,
 	   "linebreak" => \$addLineBreaks,
 	   "help" => \$helpRequested,
@@ -59,6 +61,9 @@ GetOptions("operations:s" => \$operations,
 printHelpAndExit() if $helpRequested;
 
 die $usage if $usageRequested;
+
+$spellfixFiles = "datafiles/spellfixes.txt" if !$spellfixFiles and $dataFilesDir;
+$capitalFormsFiles = "datafiles/capitalize.txt" if !$capitalFormsFiles and $dataFilesDir;
 
 my %capitalizedWords;
 my %capitalizedRegexes;
@@ -80,10 +85,10 @@ my %spellFixRegexes;
 
 
 
-# Spell fix list is inserted here:
+# Spell fix list is inserted under the line below. Do NOT remove!
 # ++SPELLFIXES++
 
-# Capitalization list is inserted here:
+# Capitalization list is inserted the line below. Do NOT remove!
 # ++CAPITALIZE++
 
 
@@ -248,7 +253,7 @@ sub finalReplacements {
 
 sub readSpellFixFile {
   my ($file) = @_;
-  # printf STDERR "Reading spellfix file $file\n";
+  printf STDERR "Reading spellfix file $file\n";
   open(FILE,$file) or die "Can't read $file";
   while (<FILE>) {
     s/^\s+//;
@@ -420,7 +425,8 @@ sub printHelpAndExit {
   printf STDERR "-operations  Comma-separated list of operation names to use. The token 'all' means all operations. Prefixing an operation name with a '!' means don't use it\n";
   printf STDERR "-capitalize  Comma-separated list of files which contain 'capitalization forms' like 'Mary', 'Palm Springs', and 'NYC',etc.\n";
   printf STDERR "-spellfixes  Comma-separated list of files which contain spell fixes like 'gentalmen => gentlemen'.\n";
-  printf STDERR "-trace       Prints out the result of each operation as it is applied to each sentence.  Can be voluminous.\n";
+  printf STDERR "-datafiles   A directory, equivalent to '-spellfixes dir/spellfixes.txt -capitalize dir/capitalize.txt\n";
+  printf STDERR "-trace       Prints out the result of each operation as it is applied to each sentence.  Not recommended unless you only have a few sentences!\n";
   printf STDERR "-showOps     Print the list of operations that will be used\n";
   printf STDERR "-help        Print this message and exit\n";
   printf STDERR "\nAvailable operations:\n\n";
@@ -598,6 +604,7 @@ sub applyCapitalizations {
 
 sub readCapitalizationsFile {
   my ($file) = @_;
+  printf STDERR "Reading capitalizations file $file\n";
   open(INPUT,$file) or die "can't read $file";
   while (<INPUT>) {
     s/^\s+//;
