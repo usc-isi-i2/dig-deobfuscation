@@ -2,19 +2,30 @@ use strict;
 use warnings;
 use Getopt::Long;
 
-my $usage = "Usage: inputScriptFile outputScriptFile -spellfixes spellfixFile -capitalize capitalizationsFile\n";
+my $usage = "Usage: inputScriptFile outputScriptFile [-spellfixes spellfixFile] [-capitalize capitalizationsFile] [-datafiles dir]\n";
 
 my $inputScript;
 my $outputScript;
 my $spellfixes;
 my $capitalize;
+my $datafilesDir;
 
 GetOptions("spellfixes:s" => \$spellfixes,
-	   "capitalize:s" => \$capitalize);
+	   "capitalize:s" => \$capitalize,
+	   "datafiles:s" => \$datafilesDir);
 
 $inputScript = shift;
 $outputScript = shift;
 
+
+die $usage unless $outputScript;
+
+
+if (!$spellfixes or !$capitalize) {
+  die "Must have '-datafiles dir' argument unless both -spellfixes and -capitalize arguments are provided\n$usage" unless $datafilesDir;
+  $spellfixes = "$datafilesDir/spellfixes.txt";
+  $capitalize = "$datafilesDir/capitalize.txt";
+}
 
 die $usage unless $outputScript and $spellfixes and $capitalize;
 
