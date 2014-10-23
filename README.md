@@ -3,7 +3,7 @@ dig-deobfuscation
 
 repository for DIG deobfuscation
 
-primary contributor: David Stallard <stallard@isi.edu>
+primary contributor: [David Stallard](mailto:stallard@isi.edu)
 
 To invoke the deobfuscator on specific input and output files, use:
 
