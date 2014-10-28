@@ -9,23 +9,47 @@ $| = 1;
 # TODO:  Add words/phrases to be capitalized/uppercased
 #
 
-my $usage = "\nUsage: [inputFile] [outputFile] [-operations operations-comma-separated] [-capitalize files] [-spellfixes files] -datafiles dir] [-showOps] [-trace] [-linebreak] [-help] [-usage]\n";
+my $usage = "\nUsage: [inputFile] [outputFile] [-operations operations-comma-separated] [-capitalize files] [-spellfixes files] -datafiles dir] [-showOps] [-trace] [-linebreaks] [-help] [-usage]\n";
 
-my $SEP = "[^a-zA-Z0-9]*";
+my $SEP = "[^a-zA-Z0-9]{0,4}";
 
-my $DIGIT = "\\d|zero|one|o|two|three|four|five|six|seven|eight|nine|ten";
+my $DIGIT = "\\d|zero|one|o|l|two|three|four|five|six|seven|eight|nine|ten";
 
 my $NON_ZERO = "[1-9]|one|two|three|four|five|six|seven|eight|nine|ten";
 
+my $useTags = 0;
+
+# my $fromFile  = "786.5l9.5399";
+# my $myVersion = "786.519.5399";
+# my $myVersion2 = "786.519.5399";
+
+# printf "%d vs. %d\n",length($fromFile),length($myVersion);
+
+# for (my $i=0;$i<length($fromFile);$i++) {
+#   my $file = substr($fromFile,$i,1);
+#   my $mine = substr($myVersion,$i,1);
+#   printf "%s = %s: %d\n",$file,$mine,$file eq $mine;
+# }
+
+# printf "PHONE: %s\n",fixSpelledPhoneNumbers("786 519 5399");
 
 
+# printf "PHONE: %s\n",fixSpelledPhoneNumbers("786 519 5399");
+
+# printf "PHONE: %s\n",fixSpelledPhoneNumbers("6'o2' 688 oo94");
+# die("done");
+
+# die("done");
 my $capitalFormsFiles = "";
 my $spellfixFiles     = "";
+my $validWordsFile;
 
 
+my %validWords;
 
 my $traceOps = 0;
-
+my $trace = 0; # for tokenization
+my $maxLines;
 my $helpRequested;
 my $usageRequested;
 my $showOps;
@@ -34,7 +58,7 @@ my $addLineBreaks;
 my $keyMode;
 
 # Took out letter-digit as doing that gained 0.3
-my $allOperations = "downcase,html,non-ascii,initial-punct,pre-tokenize,tokenize,non-alphanumeric,ellipsis,repeated-sentence-end,repeated-punct,repeated-chars,spelled-numbers,fix-emails,fix-urls,spelled-words,lookup,capitalize,final-replacements,cosmetic,std-whitespace";
+my $allOperations = "downcase,html,non-ascii,initial-punct,pre-tokenize,tokenize,non-alphanumeric,ellipsis,repeated-sentence-end,repeated-punct,repeated-chars,phone-numbers,fix-emails,fix-urls,spelled-words,lookup,capitalize,final-replacements,cosmetic,std-whitespace";
 
 my @allOperations = split(/\,/,$allOperations);
 
@@ -50,10 +74,13 @@ GetOptions("operations:s" => \$operations,
 	   "spellfixes:s" => \$spellfixFiles,
 	   "datafiles:s" => \$dataFilesDir,
 	   "trace" => \$traceOps,
-	   "linebreak" => \$addLineBreaks,
+	   "linebreaks" => \$addLineBreaks,
 	   "help" => \$helpRequested,
 	   "keymode" => \$keyMode,
 	   "usage" => \$usageRequested,
+	   "maxlines:i" => \$maxLines,
+	   "tags" => \$useTags,
+	   "validwords:s" => \$validWordsFile,
 	   );
 
 # Quit early if -help or -usage are present in the arugments list.
@@ -62,8 +89,9 @@ printHelpAndExit() if $helpRequested;
 
 die $usage if $usageRequested;
 
-$spellfixFiles = "datafiles/spellfixes.txt" if !$spellfixFiles and $dataFilesDir;
-$capitalFormsFiles = "datafiles/capitalize.txt" if !$capitalFormsFiles and $dataFilesDir;
+$spellfixFiles = "$dataFilesDir/spellfixes.txt" if !$spellfixFiles and $dataFilesDir;
+$capitalFormsFiles = "$dataFilesDir/capitalize.txt" if !$capitalFormsFiles and $dataFilesDir;
+$validWordsFile = "$dataFilesDir/valid-vocab.word-counts" if !$validWordsFile and $dataFilesDir;
 
 my %capitalizedWords;
 my %capitalizedRegexes;
@@ -80,9 +108,13 @@ my @operations = parseOperations($operations);
 warn "No operations; will be a no-op" unless @operations;
 
 
+$trace = $traceOps;
+
+# printf "TRACE: $trace\n";
+
 my %spellFixWords;
 my %spellFixRegexes;
-
+my %spellFixKeys;
 
 
 # Spell fix list is inserted under the line below. Do NOT remove!
@@ -103,14 +135,17 @@ foreach my $file (split(/\,/,$spellfixFiles)) {
   readSpellFixFile($file);
 }
 
-
+readValidWordsFile($validWordsFile) if $validWordsFile;
 
 printOperationsUsed() if $showOps;
+
 
 
 ####################################################################################
 
 
+# printf "FIXED: %s\n",join(" ",tokenizeAndFixSpelling('hhhhellllooo.my#1friend decreeeeet eb0nyy $tacy ca$h non rushed'));
+# die("done");
 
 my $inputHandle;
 my $outputHandle;
@@ -131,6 +166,8 @@ else {
   $outputHandle = *STDOUT;
 }
 
+printf STDERR "\nPROCESSING INPUT...\n\n";
+
 
 my $lineNum = 1;
 while (<$inputHandle>) {
@@ -147,16 +184,251 @@ while (<$inputHandle>) {
     printf $outputHandle "%s\t",$uri;  
   }
   # Output the deobfuscated content.
-  printf $outputHandle "%s\n",transform($line);
-  # Output an additional line break for readability if desired.  Note this will break some follow-on scripts.
+  printf $outputHandle "%s\n",transformCompleteMessage($line);
+  # Output an additional line break for readability if requested.  Note this will break some follow-on scripts.
   printf $outputHandle "\n" if $addLineBreaks;
+  # Pacifier/progress indicator
   printf STDERR "%d\n", $lineNum if ($lineNum%1000 == 0);
+  last if defined($maxLines) and $lineNum == $maxLines;
   $lineNum++;
+  
 }
 close($inputHandle);
 close($outputHandle);
 
-########################################
+###########################################################################
+
+
+sub transformCompleteMessage {
+  my ($str) = @_;
+  $str =~ s/`/'/g;
+  $str = transform($str);
+  # Capitalize the first word unless it is already capitalized (it might be all caps).
+  $str = ucfirst($str) unless $str =~ /^[A-Z]/;
+  # Remove any leading or trailing whitespace that may have gotten added.
+  $str =~ s/^\s+//; 
+  $str =~ s/\s+$//;
+  # Add final period if sentence is ending in letters - gives a net gain in punctuation WER.
+  $str =~ s/([a-zA-Z])$/$1./;
+  return $str;
+}
+
+sub transform {
+  my ($str) = @_;
+  $str = stripHtml($str);
+  $str = stripNonASCII($str);
+  $str = transformSemantic($str); 
+  return $str;
+}
+
+sub transformSemantic {
+  my ($str) = @_;
+  printf "CALLED: '%s'\n",$str if $trace;
+  if (!defined($str) or $str eq "") {
+    return "";
+  }
+  # Height with feet and inches
+  if ($str =~ /^(.*)(?<!\d)([56])\s*('|"|foot|ft|feet),?\s*(\d\d?)\b\s*("|'|inches|inch|in)?(.*)$/i) {
+    my $feet = $2;
+    my $inches = $4;
+    if (!($inches =~ /^0/) and $inches <= 11) {
+      my $pre = $1;
+      my $post = $6;
+      my $height = "$feet'$inches";
+      printf "MATCHED HEIGHT(1) '%s'\n pre: '%s'\n post: '%s'\n",$height,$pre,$post if $trace;
+      return append(transform($pre),tag("ht",$height),transform($post));
+    }
+  }
+  if ($str =~ /^(.*)(?<!\d)($NON_ZERO)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)(?!\d)(.*)$/i) {
+    my $pre  = $1;
+    # my $s0 = escapeSepr($1);
+
+    my $n1 = $2;
+    my $s1 = escapeSepr($3);
+
+    my $n2 = $4;
+    my $s2 = escapeSepr($5);
+
+    my $n3 = $6;
+    my $s3 = escapeSepr($7);
+
+    my $n4 = $8;
+    my $s4 = escapeSepr($9);
+
+    my $n5 = $10;
+    my $s5 = escapeSepr($11);
+
+    my $n6 = $12;
+    my $s6 = escapeSepr($13);
+
+    my $n7 = $14;
+    my $s7 = escapeSepr($15);
+
+    my $n8 = $16;
+    my $s8 = escapeSepr($17);
+
+    my $n9 = $18;
+    my $s9 = escapeSepr($19);
+
+    my $n10 = $20;
+
+    my $nn1 = decodeNumber($n1);
+    my $nn2 = decodeNumber($n2);
+    my $nn3 = decodeNumber($n3);
+    my $nn4 = decodeNumber($n4);
+    my $nn5 = decodeNumber($n5);
+    my $nn6 = decodeNumber($n6);
+    my $nn7 = decodeNumber($n7);
+    my $nn8 = decodeNumber($n8);
+    my $nn9 = decodeNumber($n9);
+    my $nn10 = decodeNumber($n10);
+
+    my $post = $21;
+
+    my $area = join("",$nn1,$nn2,$nn3);
+    my $exch = join("",$nn4,$nn5,$nn6);
+    my $dig4 = join("",$nn7,$nn8,$nn9,$nn10);
+    my $phone = "$area $exch-$dig4";
+    print "MATCHED PHONE: $phone\n pre: $pre\n post: $post\n" if $trace;
+    # $str =~ s/$s0$n1$s1$n2$s2$n3$s3$n4$s4$n5$s5$n6$s6$n7$s7$n8$s8$n9$s9$n10/ $nn1$nn2$nn3 $nn4$nn5$nn6-$nn7$nn8$nn9$nn10 /g;
+    return append(transform($pre),tag("phone",$phone),transform($post));
+  }
+  # '100%' as in 100% real
+  if ($str =~ /^(.*)(1[o0][o0]+)\s*%(.*)$/i) {
+    my $pre = $1;
+    my $perc = $2;
+    my $post = $3;
+    $perc =~ s/o/0/ig;
+    $perc .= "%";
+    return append(transform($pre),$perc,transform($post));
+  }
+  # URL starting with http(s)
+  if ($str =~ /^(.*)(https?\S+)\b(.*)$/) {
+    my $pre = $1;
+    my $url = $2;
+    my $post = $3;
+    printf "MATCHED URL(1): '$2' pre: '$pre' post: '$post'\n" if $trace;
+    return append(transform($pre),tag("url",$url),transform($post));
+  }
+  # URL starting with www
+  if ($str =~ /^(.*)\b(www\.\S+)\b(.*)$/) {
+    my $pre = $1;
+    my $url = $2;
+    my $post = $3;
+    printf "MATCHED URL(2): '$url' pre: '$pre' post: '$post'\n" if $trace;
+
+    return append(transform($pre),tag("url",$url),transform($post));
+  }
+  # Email ending in .com, .net, etc.
+  if ($str =~ /^(.*)\b(\S+)@(\S+)\.(com|net|us|mx)\b(.*)$/) {
+    my $pre = $1;
+    my $email = $2 . "@" . $3 . "." . $4;
+    my $post = $5;
+    print "MATCHED EMAIL(1): '$email'\n pre: '$pre'\n post: '$post'\n" if $trace;
+    return append(transform($pre),tag("email",$email),transform($post));
+  }
+  # Email for known provider (gmail, hotmail, etc), but with dropped '.com'
+  if ($str =~ /^(.*)\b(\S+)@(yahoo|gmail|hotmail)\b(.*)$/) {
+    my $pre = $1;
+    my $email = $2 . $3 . ".com";
+    my $post = $4;
+    print "MATCHED EMAIL(2): '$email'\n pre: '$pre'\n post: '$post'\n" if $trace;
+    return append(transform($pre),tag("email",$email),transform($post));
+  }
+  # URL without www or http
+  if ($str =~ /^(.*)\b(\S+)\.(com|net)(.*)$/) {
+    my $pre = $1;
+    my $url = "$2.$3";
+    my $post = $4;
+    print "MATCHED URL(3): '$url'\n pre: '$pre'\n post: '$post'\n" if $trace;
+    return append(transform($pre),tag("url",$url),transform($post));
+  }
+  # Dollar amount with pre-pended '$'
+  if ($str =~ /^(.*)\$\s*(\d\d\d?)\b(.*)$/) {
+    my $pre = $1;
+    my $amt  = "\$$2";
+    my $post = $3;
+    printf "MATCHED DOLLAR(1): '$amt' pre: '$pre' post: '$post'\n" if $trace;
+    return append(transform($pre),tag("\$",$amt),transform($post));
+  }
+  # Dollar amount with post-pended 'dollar(s)'
+  # if ($str =~ /^(.*)(?<!\d)(\d\d\d?)(?>!\d)\s*(dollars|\$)(.*)$/) {
+  if ($str =~ /^(.*)(?<!\d)(\d\d\d?)\s*(dollars|dollar)(.*)$/) {
+    my $pre = $1;
+    my $amt = "\$$2";
+    my $post = $4;
+    printf "MATCHED DOLLAR(2): '$amt' pre: '$pre' post: '$post'\n" if $trace;
+    return append(transform($pre),tag('$',$amt),transform($post));
+  }
+  # Dollar amount with directly post-pended '$'
+  if ($str =~ /^(.*)\b(\d\d\d?)\$(?!\S)(.*)$/) {
+    my $pre = $1;
+    my $amt = "\$$2";
+    my $post = $3;
+    printf "MATCHED DOLLAR(3): '$amt'\n pre: '$pre'\n post: '$post'\n" if $trace;
+    return append(transform($pre),tag('$',$amt),transform($post));
+  }
+
+  # Height with just feet
+  # if ($str =~ /^(.*)(?<!\d)([456])\s*('|"|foot|ft|feet)(?>!$DIGIT)(.*)$/) {
+  if ($str =~ /^(.*)(?<!\d)([456])\s*('|"|foot|ft|feet)(.*)$/) {
+    printf "MATCHED HEIGHT(2) '$2'\n pre: '$1'\n post: '$3'\n" if $trace;
+    my $pre = $1;
+    my $post = $4;
+    my $height = "$2'";
+
+    return append(transform($pre),tag("ht",$height),transform($post));
+  }
+  # Weight
+  if ($str =~ /^(.*)(\d\d\d)\s*(pounds|pound|lbs|lb|pnds|pnd|wt)(.*)$/i) {
+    my $qty = $2;
+    my $pre = $1;
+    my $post = $4;
+    printf "MATCHED WEIGHT %s\n pre: '%s'\n post: '%s'\n",$qty,$pre,$post if $trace;
+
+    my @result = (transform($pre),tag("wt","$qty lbs"),transform($post));
+
+    return append(@result);
+  }
+  # Cup size
+  if ($str =~ /^(.*)(3\d)\s*([BCDEF]+)('?s)?(.*)$/i) {
+    my  $pre = $1;
+    my $post = $5;
+    my $n = $2;
+    my $cup = uc($3);
+    my $poss = $4;
+    $poss = "" unless defined($poss);
+    $poss = "'s" if lc($poss) eq "s";
+    print "MATCHED CUP SIZE: '$n$cup$poss'\n pre: '$pre'\n post: '$post'\n" if $trace;
+    return append(transform($pre),tag("cup","$n$cup$poss"),transform($post));
+  }
+
+  return transformGeneralText($str);
+}
+
+sub append {
+  my (@items) = @_;
+  my $result = join(" ",@items);
+  print "APPEND: $result\n" if $trace;
+  return $result;
+}
+
+sub tag {
+  my ($tag,$str) = @_;
+  if ($useTags) {
+    return "<$tag>$str</$tag>";
+  }
+  else {
+    return $str;
+  }
+}
+
+# sub trace {
+#   my @list = @_;
+#   printf "RETURNING: %s\n",join(" ",@list) if $trace;
+#   return @list;
+# }
+
 
 sub unencodeString {
   my ($str) = @_;
@@ -171,7 +443,7 @@ sub unencodeString {
 sub tokenClass {
   my ($tok) = @_;
   # We include apostrophe because of contractions
-  if ($tok =~ /^[a-zA-Z']+$/) {
+  if ($tok =~ /^[a-zA-Z'@]+$/) {
     return "LETTER";
   }
   elsif ($tok =~ /\d/) {
@@ -185,7 +457,11 @@ sub tokenClass {
   }
 }
 
-sub tokenize {
+
+
+
+
+sub splitOnCharClass {
   my ($str) = @_;
   $str =~ s/\`/'/g;
   my @chars = split(//,$str);
@@ -201,10 +477,10 @@ sub tokenize {
     $curToken .= $char;
   }
   push(@tokens,$curToken);
-  my $assembled = assembleTokens(@tokens);
-  $assembled = fixAmounts($assembled);
-  return $assembled;
+  return @tokens;
 }
+
+
 
 sub finalReplacements {
   my ($str) = @_;
@@ -246,8 +522,6 @@ sub finalReplacements {
   # Get rid of trailing comma
   $str =~ s/\,$//g;
 
-  # Add trailing period if sentence is ending in letters - gives a net gain in punctuation WER.
-  $str =~ s/([a-zA-Z])$/$1./;
   return $str;
 }
 
@@ -265,12 +539,30 @@ sub readSpellFixFile {
   close(FILE);
 }
 
+sub readValidWordsFile {
+  my ($file) = @_;
+  printf STDERR "Reading valid words file $file\n";
+  open(FILE,$file) or die "Can't read $file";
+  while (<FILE>) {
+    my ($word,$count) = split;
+    $validWords{$word}=$count;
+  }
+  close(FILE);
+}
+
 sub spellfix {
   my ($spellfix) = @_;
   my ($key,$fix) = split(/\=\>/,$spellfix);
   die "Bad line: $_" unless defined($fix);
   $key = fixWhiteSpace($key);
   $fix = fixWhiteSpace($fix);
+  foreach my $tok (split(' ',$fix)) {
+    $validWords{$tok}++;
+  }
+  printf "$key being mapped to itself\n" if $key eq $fix;  
+  my $current = $spellFixKeys{$key};
+  printf "Already have a fix for $key: $current vs. $fix\n" if $current;
+  $spellFixKeys{$key} = $fix;
   if ($key =~ /\S\s/) {
     $key = join("\\s+",split(' ',$key));
     $key = "\\b$key\\b";
@@ -288,17 +580,20 @@ sub fixWhiteSpace {
 
 sub preTokenize {
   my ($str) = @_;
+  $str =~ s/\r/ /g;
   $str =~ s/([a-zA-Z])\$([a-zA-Z])/$1s$2/g;
   return $str;
 }
 
 sub fixAmounts {
   my ($str) = @_;
+  # Put dollar signs next to number
   $str =~ s/\$ (\d\d+)/\$$1/g;
+  # Put '%' next to number
   $str =~ s/100 \%/100\%/g;
   $str =~ s/1 oo \%/100\%/g;  # 100% spelt deviantly as 1 oo
   $str =~ s/(\d+) \$/\$ $1/g;   # Permuted dollar amounts:  '100 $' vs. '$ 100'
-  $str =~ s/(\d\d)\s+(b|c|d|dd|e|ee)/$1 . uc($2)/ge;  # Cup size
+  $str =~ s/(\d\d)\s+(b|c|d|dd|ddd|e|ee)\b/$1 . uc($2)/ge;  # Cup size
   $str =~ s/(\d)\s*\'\s*(\d)/$1'$2/g; # Heights: 5'4
   $str =~ s/(\d\d?)\s*\:?\s([ap])\.?m/$1:00 $2m/g;
   return $str;
@@ -351,6 +646,8 @@ sub fixSpelledWords {
   $str = fixSpelledWordsWithSeparator($str," _ ");
   $str = fixSpelledWordsWithSeparator($str," - ");
   $str = fixSpelledWordsWithSeparator($str,"  ");
+  $str = fixSpelledWordsWithSeparator($str,"   ");
+  $str = fixSpelledWordsWithSeparator($str," \* ");
   return $str;
 }
 
@@ -425,7 +722,7 @@ sub printHelpAndExit {
   printf STDERR "-operations  Comma-separated list of operation names to use. The token 'all' means all operations. Prefixing an operation name with a '!' means don't use it\n";
   printf STDERR "-capitalize  Comma-separated list of files which contain 'capitalization forms' like 'Mary', 'Palm Springs', and 'NYC',etc.\n";
   printf STDERR "-spellfixes  Comma-separated list of files which contain spell fixes like 'gentalmen => gentlemen'.\n";
-  printf STDERR "-datafiles   A directory, equivalent to '-spellfixes dir/spellfixes.txt -capitalize dir/capitalize.txt\n";
+  printf STDERR "-datafiles   Directory to find data files in. Equivalent to '-spellfixes dir/spellfixes.txt -capitalize dir/capitalize.txt\n";
   printf STDERR "-trace       Prints out the result of each operation as it is applied to each sentence.  Not recommended unless you only have a few sentences!\n";
   printf STDERR "-showOps     Print the list of operations that will be used\n";
   printf STDERR "-help        Print this message and exit\n";
@@ -453,9 +750,10 @@ sub downcase {
 #   return join(" ",@tokens);
 }
 
-sub transform {
+sub transformGeneralText {
   my ($line) = @_;
-  printf STDERR "init: %s\n\n",$line if $traceOps;
+  printf STDERR "GENERAL TEXT: %s\n\n",$line if $traceOps;
+  $line = tokenizeAndFixSpelling($line);
   foreach my $op (@operations) {
     if ($op eq "downcase") {
       $line = downcase($line);
@@ -464,10 +762,10 @@ sub transform {
       $line = makeCosmeticFixes($line);
     }
     elsif ($op eq "html") {
-      $line = stripHtml($line);
+      # $line = stripHtml($line);
     }
     elsif ($op eq "non-ascii") {
-      $line = stripNonASCII($line);
+      # $line = stripNonASCII($line);
     }
     elsif ($op eq "std-whitespace") {
       $line = standardizeWhitespace($line);
@@ -485,7 +783,7 @@ sub transform {
       $line = finalReplacements($line);
     }
     elsif ($op eq "pre-tokenize") {
-      $line = preTokenize($line);
+      # $line = preTokenize($line);
     }
     elsif ($op eq "repeated-punct") {
       $line = stripRepeatedPunct($line);
@@ -494,7 +792,7 @@ sub transform {
       $line = initialPunct($line);
     }
     elsif ($op eq "tokenize") {
-      $line = tokenize($line);
+      # $line = join(" ",splitOnCharClass($line));
     }
     elsif ($op eq "repeated-chars") {
       $line = removeRepeatedChars($line);
@@ -502,13 +800,13 @@ sub transform {
     elsif ($op eq "lookup") {
       $line = applySpellFixes($line);
     }
-    elsif ($op eq "spelled-numbers") {
-      $line = fixSpelledPhoneNumbers($line);
+    elsif ($op eq "phone-numbers") {
+      # $line = fixSpelledPhoneNumbers($line);
     }
     elsif ($op eq "fix-emails") {
       $line = fixEmails($line);
     }
-        elsif ($op eq "fix-urls") {
+    elsif ($op eq "fix-urls") {
       $line = fixUrls($line);
     }
     elsif ($op eq "letter-digit") {
@@ -528,6 +826,144 @@ sub transform {
   return $line;
 }
 
+sub tokenizeAndFixSpelling {
+  my ($str) = @_;
+  $str = applySpellFixRegexes($str);
+  my @result;
+  my $TRACE = 0;
+  my @working = split(' ',$str);
+  while (@working) {
+    my $tok = shift(@working);
+    printf "tok: $tok\n" if $TRACE;
+    if (isValidToken($tok)) {
+      printf "Is valid\n" if $TRACE;
+      push(@result,$tok);
+    }
+    else {
+      my @exp = splitOnRegularPunctuation($tok);
+      printf "split regular: %s\n",join(" ",@exp) if $TRACE;
+      if ($exp[0] eq $tok) {  # Splitting didn't change it
+	printf "Splitting on regular punct didn't change\n" if $TRACE;
+	my $fixed = fixDuplicateChars($tok);
+	if ($fixed ne $tok) {
+	  printf "Removing duplicate chars changed it: $fixed\n" if $TRACE;
+	  unshift(@working,$fixed);
+	}
+	else {
+	  printf "Removing duplicate chars didn't change\n" if $TRACE;
+	  my $tentative = applyTentativeSpellFixes($tok);
+	  if (isValidToken($tentative)) {
+	    printf "Removing tentative changed it and made it valid: $fixed\n" if $TRACE;
+	    push(@result,$tentative);
+	  }
+	  else {
+	    @exp = lookupSpellFix($tok);
+	    if ($exp[0] eq $tok) {
+	      printf "Spell lookup didn't change it\n" if $TRACE;
+	      @exp = splitOnCharClass($tok);
+	      if ($exp[0] eq $tok) {
+		printf "Splitting on char class didn't change it\n" if $TRACE;
+		push(@result,$tok);
+	      }
+	      else {
+		printf "Splitting on char class changed it\n" if $TRACE;
+		unshift(@working,@exp);
+	      }
+	    }
+	    else {
+	      printf "Spell lookup changed it: %s\n",join(" ",@exp) if $TRACE;
+	      unshift(@working,@exp);
+	    }
+	  }
+	}
+      }
+      else {
+	printf "Split on regular punct: %s\n",join(" ",@exp) if $TRACE;
+	unshift(@working,@exp);
+      }
+    }
+  }
+  my $result = join(" ",@result);
+  $result = applySpellFixRegexes($result);
+  return $result;
+}
+
+
+sub splitOnRegularPunctuation {
+  my ($str) = @_;
+  my $allowed = 'a-zA-Z\'\d\$\@';
+  if ($str =~ /^([$allowed]*)([^$allowed]+)([$allowed]*)$/) {
+    my @tokens;
+    my $pre = $1;
+    my $punct = $2;
+    my $post = $3;
+    push(@tokens,$pre) if $pre;
+    push(@tokens,$punct);
+    if ($post) {
+      push(@tokens,splitOnRegularPunctuation($post));
+    }
+    return @tokens;
+  }
+  else {
+    return ($str);
+  }
+}
+
+sub applyTentativeSpellFixes {
+  my ($str) = @_;
+  $str =~ s/\@/a/g;
+  $str =~ s/\$/s/g;
+  $str =~ s/0/o/g;
+  return $str;
+}
+
+sub isValidToken {
+  my ($str) = @_;
+  $str = lc($str);
+  return (isValidWord($str) or 
+	  $str =~ /^[\d\$\%]+$/ or 
+	  $str =~ /^[^a-z\'\d]+$/);
+}
+
+sub fixDuplicateChars {
+  my ($str) = @_;
+  $str =~ s/azz/ass/g;
+
+  # Two down to one
+  $str =~ s/([bcdghnpquvwxyz])\1+/$1/g;
+  # Three copies down to two
+  $str =~ s/([a-z])\1\1+/$1$1/g;
+  
+  $str =~ s/oo\b/o/;
+
+  return $str;
+}
+
+sub fixWord {
+  my ($str) = @_;
+  if ($str =~ /^mmm+$/) {
+    return qw(mmm);
+  }
+  elsif ($str =~ /^ahh+$/) {
+    return qw(ahh);
+  }
+  $str =~ s/azz/ass/g;
+  # Two down to one
+  $str =~ s/([bcdghnpquvwxyz])\1+/$1/g;
+  # Three copies down to two
+  $str =~ s/([a-z])\1\1+/$1$1/g;
+  
+  $str =~ s/oo\b/o/;
+
+  return $str;
+}
+
+sub isValidWord {
+  my ($word) = @_;
+  $word = lc($word);
+  return $validWords{$word};
+}
+
 # TODO: Only handles a specific number of path entries right now...
 sub fixUrls {
   my ($str) = @_;
@@ -535,6 +971,20 @@ sub fixUrls {
   # $str =~ s/http\s*\:\s*([a-zA-Z]+(\s*\.\s*[a-zA-Z]+))\s*\.\s*com/"http:\/\/" . combine("$1 $2","") . ".com"/ge;
   return $str;
 }
+
+
+sub NEWfixUrls {
+  my ($str) = @_;
+  $str =~ s/http[\s:\/]*(.*)((com|net|us|mx))/"http:\/\/" . purgeWhiteSpace($1) . $2/ge;
+  return $str;
+}
+
+sub purgeWhiteSpace {
+  my ($str) = @_;
+  $str =~ s/\s+//g;
+  return $str;
+}
+
 
 sub makeCosmeticFixes {
   my ($line) = @_;
@@ -545,13 +995,30 @@ sub makeCosmeticFixes {
   return $line;
 }
 
-sub applySpellFixes {
+sub applySpellFixRegexes {
   my ($line) = @_;
   $line =~ s/xo[xo]*/xoxo/g;
   for my $regex (keys(%spellFixRegexes)) {
     my $fix = $spellFixRegexes{$regex};
     $line =~ s/$regex/$fix/ig;
   }
+  return $line;
+}
+
+sub lookupSpellFix {
+  my ($word) = @_;
+  my $fix = $spellFixWords{lc($word)};
+  if (defined($fix)) {
+    return split(' ',$fix);
+  }
+  else {
+    return ($word);
+  }
+}
+
+sub applySpellFixes {
+  my ($line) = @_;
+  $line = applySpellFixRegexes($line);
   # printf STDERR "line: %s\n",$line;
   my @tokens = split(' ',$line);
   for (my $i=0;$i<scalar(@tokens);$i++) {
@@ -575,7 +1042,7 @@ sub applyCapitalizations {
 
   # Capitalize pronouns i'm, i'll, and i
   $str =~ s/(\W)i'm(\W)/$1I'm$2/g;
-  $str =~ s/(\W)i'll(\W)/$1'll$2/g;
+  $str =~ s/(\W)i'll(\W)/$1I'll$2/g;
   $str =~ s/(\W)i(\W)/$1I$2/g;
 
   # Capitalize words which follow end-of-sentence punctuation
@@ -597,8 +1064,6 @@ sub applyCapitalizations {
     my $value = $capitalizedRegexes{$regex};
     $str =~ s/$regex/$value/ig;
   }
-  # Capitalize the first word unless it is already capitalized (it might be all caps).
-  $str = ucfirst($str) unless $str =~ /^[A-Z]/;
   return $str;
 }
 
@@ -612,6 +1077,7 @@ sub readCapitalizationsFile {
     next unless $_;  # Skip blank lines.
     next if /^\#/;   # Skip comment lines
     my $name = $_;
+    printf "Not capitalized: $name\n" unless $name =~ /^[A-Z]/;
     capitalize($name);
   }
   close(INPUT);
@@ -619,6 +1085,9 @@ sub readCapitalizationsFile {
 
 sub capitalize {
   my ($name) = @_;
+  foreach my $tok (split(' ',$name)) {
+    $validWords{lc($tok)}++;
+  }
   if ($name =~ /^\S+\s+\S+/) {
     my $regex = "\\b$name\\b";
     $capitalizedRegexes{$regex}=$name;
@@ -649,8 +1118,7 @@ sub digitizeTeens {
 sub fixSpelledPhoneNumbers {
   my ($str) = @_;
   $str = digitizeTeens($str);
-  # if ($str =~ m/($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)/) {
-  if ($str =~ m/($SEP)($NON_ZERO)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)/) {
+  if ($str =~ /(.*)($NON_ZERO)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)($SEP)($DIGIT)/) {
 
     my $s0 = escapeSepr($1);
 
@@ -744,8 +1212,9 @@ sub escapeSepr {
 
 sub decodeNumber {
   my ($str) = @_;
-  return 0 if $str eq "zero" or $str eq "o" or $str eq "0";
-  return 1 if $str eq "one" or $str eq "1";
+  $str = lc($str);
+  return 0 if $str eq "zero" or $str eq "o" or $str eq "0" or $str eq "O";
+  return 1 if $str eq "one" or $str eq "1" or $str eq "l";
   return 2 if $str eq "two" or $str eq "2";
   return 3 if $str eq "three" or $str eq "3";
   return 4 if $str eq "four" or $str eq "4";
@@ -770,12 +1239,14 @@ sub initialPunct {
 sub removeRepeatedChars {
   my ($line) = @_;
   $line =~ s/azz/ass/g;
-  $line =~ s/ooo+/oo/g;
-  $line =~ s/kk+/k/g;
-  $line =~ s/zz+/z/g;
-  $line =~ s/sss+/ss/g;
-  $line =~ s/yy+/y/g;
-  $line =~ s/z\b/s/g;
+  $line =~ s/([a-z])\1\1+/$1$1/g;
+#   $line =~ s/ooo+/oo/g;
+#   $Line =~ s/aa+/aa/g;
+#   $line =~ s/kk+/k/g;
+#   $line =~ s/zz+/z/g;
+#   $line =~ s/sss+/ss/g;
+#   $line =~ s/yy+/y/g;
+#   $line =~ s/z\b/s/g;
   return $line;
 }
 
@@ -795,8 +1266,7 @@ sub reduceRepeatedPunct {
 
 sub ellipsis {
   my ($line) = @_;
-  # $line =~ s/\s*\.\.*/\. /g;
-  $line =~ s/\.\.*/\. /g;
+  $line =~ s/\.\.+/\. /g;
   return $line;
 }
 
@@ -807,6 +1277,7 @@ sub stripNonASCII {
   $line =~ s/\\u\d\d\d\d//g;
   $line =~ s/\\u[\da-f]{4}//g;
   $line =~ s/\<u\+[\da-zA-Z]*\>//g;
+  $line =~ s/\r/ /g;
   return $line;
 }
 
@@ -822,13 +1293,15 @@ sub stripHtml {
   # Kill everything inside a <script> </script>
   $line =~ s/<script>[^<>]*<\/script>/ /g;
   $line =~ s/<[^>]+>/ /g;
-  # $line =~ s/\<\s*[a-zA-Z]+\s*\/?>/ /g;
-  # $line =~ s/\<\s*\/[a-zA-Z]+\s*>/ /g;
-  $line =~ s/\&quot\;/ /g;
+
+  # $line =~ s/\&quot\;/ /g;
+  $line =~ s/\&quot\;/"/g;
+  $line =~ s/\&#039\;/'/g;
   $line =~ s/\&amp\;/ /g;
   $line =~ s/\&nbsp\;/ /g;
   $line =~ s/\&[a-zA-Z]{1,6}\;/ /g;
   $line =~ s/\&\#\d*\;//g;
+  $line =~ s/\&\#\d+//g;
   return $line;
 }
 
