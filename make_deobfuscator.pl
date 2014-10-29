@@ -9,6 +9,7 @@ my $outputScript;
 my $spellfixes;
 my $capitalize;
 my $datafilesDir;
+my $vocabFile;
 
 GetOptions("spellfixes:s" => \$spellfixes,
 	   "capitalize:s" => \$capitalize,
@@ -27,6 +28,8 @@ if (!$spellfixes or !$capitalize) {
   $capitalize = "$datafilesDir/capitalize.txt";
 }
 
+$vocabFile = "$datafilesDir/valid-vocab.word-counts";
+
 die $usage unless $outputScript and $spellfixes and $capitalize;
 
 
@@ -40,6 +43,7 @@ die "Trying to overwrite input script: $inputScript\n" if ($outputScript ~~ @all
 
 my $spellFixesDone = 0;
 my $capitalizeDone = 0;
+my $wordsDone      = 0;
 
 #######################################
 
@@ -68,13 +72,22 @@ while (<INPUT>) {
     }
     $capitalizeDone = 1;
   }
+  elsif (/^# \+\+VOCAB\+\+/) {
+    printf OUTPUT "\n";
+    foreach my $line (readFile($vocabFile)) {
+      my ($word,$count) = split(' ',$line);
+      printf OUTPUT "validWord(\"%s\",%d);\n",$word,$count;
+    }
+    $wordsDone = 1;
+  }
+    
 }
 close(INPUT);
 close(OUTPUT);
 
 die "Did not find '# ++SPELLFIXES++' in input script $inputScript" unless $spellFixesDone;
 die "Did not find '# ++CAPITALIZE++' in input script $inputScript" unless $capitalizeDone;
-
+die "Did not find '# ++VOCAB++' in input script $inputScript" unless $wordsDone;
 ################################################
 
 sub readFile {
