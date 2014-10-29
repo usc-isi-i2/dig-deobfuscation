@@ -123,6 +123,8 @@ my %spellFixKeys;
 # Capitalization list is inserted the line below. Do NOT remove!
 # ++CAPITALIZE++
 
+# Vocabulary list
+# ++VOCAB++
 
 
 # Read capitalization forms files
@@ -198,6 +200,11 @@ close($outputHandle);
 
 ###########################################################################
 
+
+sub validWord {
+  my ($word,$count) = @_;
+  $validWords{$word} = $count;
+}
 
 sub transformCompleteMessage {
   my ($str) = @_;
