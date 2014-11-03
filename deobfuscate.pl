@@ -17,36 +17,13 @@ my $DIGIT = "\\d|zero|one|o|l|two|three|four|five|six|seven|eight|nine|ten";
 
 my $NON_ZERO = "[1-9]|one|two|three|four|five|six|seven|eight|nine|ten";
 
+my $inputFile;
+my $outputFile;
 my $useTags = 0;
-
-# my $fromFile  = "786.5l9.5399";
-# my $myVersion = "786.519.5399";
-# my $myVersion2 = "786.519.5399";
-
-# printf "%d vs. %d\n",length($fromFile),length($myVersion);
-
-# for (my $i=0;$i<length($fromFile);$i++) {
-#   my $file = substr($fromFile,$i,1);
-#   my $mine = substr($myVersion,$i,1);
-#   printf "%s = %s: %d\n",$file,$mine,$file eq $mine;
-# }
-
-# printf "PHONE: %s\n",fixSpelledPhoneNumbers("786 519 5399");
-
-
-# printf "PHONE: %s\n",fixSpelledPhoneNumbers("786 519 5399");
-
-# printf "PHONE: %s\n",fixSpelledPhoneNumbers("6'o2' 688 oo94");
-# die("done");
-
-# die("done");
 my $capitalFormsFiles = "";
+my $capsDecisionFile;
 my $spellfixFiles     = "";
 my $validWordsFile;
-
-
-my %validWords;
-
 my $traceOps = 0;
 my $trace = 0; # for tokenization
 my $maxLines;
@@ -56,6 +33,10 @@ my $showOps;
 my $dataFilesDir;
 my $addLineBreaks;
 my $keyMode;
+my $operations = "all";
+my $minWordCount = 1;
+
+
 
 # Took out letter-digit as doing that gained 0.3
 my $allOperations = "downcase,html,non-ascii,initial-punct,pre-tokenize,tokenize,non-alphanumeric,ellipsis,repeated-sentence-end,repeated-punct,repeated-chars,phone-numbers,fix-emails,fix-urls,spelled-words,lookup,capitalize,final-replacements,cosmetic,std-whitespace";
@@ -66,7 +47,7 @@ my @contractions = qw(i'm i'll i'd i've you're you'll);
 
 # Default is all operations
 
-my $operations = "all";
+
 
 GetOptions("operations:s" => \$operations,
 	   "showOps" => \$showOps,
@@ -81,6 +62,7 @@ GetOptions("operations:s" => \$operations,
 	   "maxlines:i" => \$maxLines,
 	   "tags" => \$useTags,
 	   "validwords:s" => \$validWordsFile,
+	   "minwordcount:i" => \$minWordCount,
 	   );
 
 # Quit early if -help or -usage are present in the arugments list.
@@ -91,13 +73,13 @@ die $usage if $usageRequested;
 
 $spellfixFiles = "$dataFilesDir/spellfixes.txt" if !$spellfixFiles and $dataFilesDir;
 $capitalFormsFiles = "$dataFilesDir/capitalize.txt" if !$capitalFormsFiles and $dataFilesDir;
+$capsDecisionFile  = "$dataFilesDir/caps.decisions";
 $validWordsFile = "$dataFilesDir/valid-vocab.word-counts" if !$validWordsFile and $dataFilesDir;
 
-my %capitalizedWords;
-my %capitalizedRegexes;
+# Get the input and output files
 
-my $inputFile  = shift;
-my $outputFile = shift;
+$inputFile  = shift;
+$outputFile = shift;
 
 # die $usage unless $outputFile;
 
@@ -110,44 +92,60 @@ warn "No operations; will be a no-op" unless @operations;
 
 $trace = $traceOps;
 
-# printf "TRACE: $trace\n";
-
+my $singletonProb;
+my %capitalizedWords;
+my %capitalizedRegexes;
+my %validWords;
+my %wordProbs;
 my %spellFixWords;
 my %spellFixRegexes;
 my %spellFixKeys;
+my $spellTree = {};
 
 
 # Spell fix list is inserted under the line below. Do NOT remove!
 # ++SPELLFIXES++
 
-# Capitalization list is inserted the line below. Do NOT remove!
-# ++CAPITALIZE++
-
 # Vocabulary list
 # ++VOCAB++
 
+# Capitalization list is inserted the line below. Do NOT remove!
+# ++CAPITALIZE++
 
-# Read capitalization forms files
+readValidWordsFile($validWordsFile) if $validWordsFile;
+
+
+# Read the explicit capitalization forms files
 foreach my $file (split(/\,/,$capitalFormsFiles)) {
   readCapitalizationsFile($file);
 }
+
+# Data-driven capitalization is hurting us right now
+
+# Read the automatically-derived caps forms next.  These will not override the explicit ones.
+# readCapsDecisionFile($capsDecisionFile);
 
 # Read the spell fix files
 foreach my $file (split(/\,/,$spellfixFiles)) {
   readSpellFixFile($file);
 }
 
-readValidWordsFile($validWordsFile) if $validWordsFile;
+
+
+buildSpellTree();
+
 
 printOperationsUsed() if $showOps;
 
 
+# printf "FIXED: %s\n",fixSpelledWords("i am a");
+
+# findWords(split(//,"disclaimer"));
+# die('done');
 
 ####################################################################################
 
 
-# printf "FIXED: %s\n",join(" ",tokenizeAndFixSpelling('hhhhellllooo.my#1friend decreeeeet eb0nyy $tacy ca$h non rushed'));
-# die("done");
 
 my $inputHandle;
 my $outputHandle;
@@ -167,6 +165,13 @@ if (defined($outputFile)) {
 else {
   $outputHandle = *STDOUT;
 }
+
+# printf STDERR "PERC: %s\n",transform("1oOoo percent real");
+
+# my @tmp = split(' ',"h o t n e w  g o r g e o u s  b l o n d e  p l a y m a t e");
+# printf STDERR "TMP: %s\n",join(" ",findWords(@tmp));
+
+# printf STDERR "FIXED: %s\n",fixSpelledWords("hello my name is s e x y");
 
 printf STDERR "\nPROCESSING INPUT...\n\n";
 
@@ -198,20 +203,29 @@ while (<$inputHandle>) {
 close($inputHandle);
 close($outputHandle);
 
+
 ###########################################################################
 
 
-sub validWord {
-  my ($word,$count) = @_;
-  $validWords{$word} = $count;
+sub replaceOsWithZeros {
+  my ($str) = @_;
+  $str =~ s/[oO]/0/g;
+  return $str;
 }
 
 sub transformCompleteMessage {
   my ($str) = @_;
   $str =~ s/`/'/g;
+  $str =~ s/\b(\d+)([oO]+)\b/$1 . replaceOsWithZeros($2)/eg;
   $str = transform($str);
   # Capitalize the first word unless it is already capitalized (it might be all caps).
   $str = ucfirst($str) unless $str =~ /^[A-Z]/;
+  $str =~ s/\([^a-zA-Z\d]*\)//g;
+  # Get rid of useless parens
+  $str =~ s/\([^a-zA-Z\d]*\)//g;
+  $str =~ s/^(.*)\(([^\)]*)$/$1$2/g;
+  $str =~ s/^([^\(]*)\)(.*)$/$1$2/g;
+
   # Remove any leading or trailing whitespace that may have gotten added.
   $str =~ s/^\s+//; 
   $str =~ s/\s+$//;
@@ -230,7 +244,7 @@ sub transform {
 
 sub transformSemantic {
   my ($str) = @_;
-  printf "CALLED: '%s'\n",$str if $trace;
+  printf STDERR "CALLED: '%s'\n",$str if $trace;
   if (!defined($str) or $str eq "") {
     return "";
   }
@@ -242,7 +256,7 @@ sub transformSemantic {
       my $pre = $1;
       my $post = $6;
       my $height = "$feet'$inches";
-      printf "MATCHED HEIGHT(1) '%s'\n pre: '%s'\n post: '%s'\n",$height,$pre,$post if $trace;
+      printf STDERR "MATCHED HEIGHT(1) '%s'\n pre: '%s'\n post: '%s'\n",$height,$pre,$post if $trace;
       return append(transform($pre),tag("ht",$height),transform($post));
     }
   }
@@ -300,29 +314,28 @@ sub transformSemantic {
     # $str =~ s/$s0$n1$s1$n2$s2$n3$s3$n4$s4$n5$s5$n6$s6$n7$s7$n8$s8$n9$s9$n10/ $nn1$nn2$nn3 $nn4$nn5$nn6-$nn7$nn8$nn9$nn10 /g;
     return append(transform($pre),tag("phone",$phone),transform($post));
   }
-  # '100%' as in 100% real
-  if ($str =~ /^(.*)(1[o0][o0]+)\s*%(.*)$/i) {
-    my $pre = $1;
-    my $perc = $2;
-    my $post = $3;
+  # '100%' as in "100% real"
+  if ($str =~ /(1[o0][o0]+)\s*(%|percent|perc)/i) {
+    my ($pre,$perc,$post) = ($`,$1,$');
     $perc =~ s/o/0/ig;
     $perc .= "%";
     return append(transform($pre),$perc,transform($post));
   }
   # URL starting with http(s)
-  if ($str =~ /^(.*)(https?\S+)\b(.*)$/) {
+  if ($str =~ /^(.*)(https?\S+)\b(.*)$/i) {
     my $pre = $1;
     my $url = $2;
     my $post = $3;
-    printf "MATCHED URL(1): '$2' pre: '$pre' post: '$post'\n" if $trace;
+    printf STDERR "MATCHED URL(1): '$2' pre: '$pre' post: '$post'\n" if $trace;
     return append(transform($pre),tag("url",$url),transform($post));
   }
   # URL starting with www
-  if ($str =~ /^(.*)\b(www\.\S+)\b(.*)$/) {
-    my $pre = $1;
-    my $url = $2;
-    my $post = $3;
-    printf "MATCHED URL(2): '$url' pre: '$pre' post: '$post'\n" if $trace;
+  if ($str =~ /www(\.|dot)\S+/i) {
+    my $pre  = $`;
+    my $url  = $&;
+    my $post = $';
+    $url =~ s/dot/\./g;
+    printf STDERR "MATCHED URL(2): '$url' pre: '$pre' post: '$post'\n" if $trace;
 
     return append(transform($pre),tag("url",$url),transform($post));
   }
@@ -355,16 +368,15 @@ sub transformSemantic {
     my $pre = $1;
     my $amt  = "\$$2";
     my $post = $3;
-    printf "MATCHED DOLLAR(1): '$amt' pre: '$pre' post: '$post'\n" if $trace;
+    printf STDERR "MATCHED DOLLAR(1): '$amt' pre: '$pre' post: '$post'\n" if $trace;
     return append(transform($pre),tag("\$",$amt),transform($post));
   }
   # Dollar amount with post-pended 'dollar(s)'
-  # if ($str =~ /^(.*)(?<!\d)(\d\d\d?)(?>!\d)\s*(dollars|\$)(.*)$/) {
   if ($str =~ /^(.*)(?<!\d)(\d\d\d?)\s*(dollars|dollar)(.*)$/) {
     my $pre = $1;
     my $amt = "\$$2";
     my $post = $4;
-    printf "MATCHED DOLLAR(2): '$amt' pre: '$pre' post: '$post'\n" if $trace;
+    printf STDERR "MATCHED DOLLAR(2): '$amt' pre: '$pre' post: '$post'\n" if $trace;
     return append(transform($pre),tag('$',$amt),transform($post));
   }
   # Dollar amount with directly post-pended '$'
@@ -372,14 +384,14 @@ sub transformSemantic {
     my $pre = $1;
     my $amt = "\$$2";
     my $post = $3;
-    printf "MATCHED DOLLAR(3): '$amt'\n pre: '$pre'\n post: '$post'\n" if $trace;
+    printf STDERR "MATCHED DOLLAR(3): '$amt'\n pre: '$pre'\n post: '$post'\n" if $trace;
     return append(transform($pre),tag('$',$amt),transform($post));
   }
 
   # Height with just feet
   # if ($str =~ /^(.*)(?<!\d)([456])\s*('|"|foot|ft|feet)(?>!$DIGIT)(.*)$/) {
   if ($str =~ /^(.*)(?<!\d)([456])\s*('|"|foot|ft|feet)(.*)$/) {
-    printf "MATCHED HEIGHT(2) '$2'\n pre: '$1'\n post: '$3'\n" if $trace;
+    printf STDERR "MATCHED HEIGHT(2) '$2'\n pre: '$1'\n post: '$3'\n" if $trace;
     my $pre = $1;
     my $post = $4;
     my $height = "$2'";
@@ -391,23 +403,31 @@ sub transformSemantic {
     my $qty = $2;
     my $pre = $1;
     my $post = $4;
-    printf "MATCHED WEIGHT %s\n pre: '%s'\n post: '%s'\n",$qty,$pre,$post if $trace;
+    printf STDERR "MATCHED WEIGHT %s\n pre: '%s'\n post: '%s'\n",$qty,$pre,$post if $trace;
 
     my @result = (transform($pre),tag("wt","$qty lbs"),transform($post));
 
     return append(@result);
   }
+  # A+
+  if ($str =~ /\b[aA]\+/) {
+    my ($pre,$post) = ($`,$');
+    return append(transform($pre),tag("A+","A+"),transform($post));
+  }
   # Cup size
-  if ($str =~ /^(.*)(3\d)\s*([BCDEF]+)('?s)?(.*)$/i) {
-    my  $pre = $1;
-    my $post = $5;
-    my $n = $2;
-    my $cup = uc($3);
-    my $poss = $4;
-    $poss = "" unless defined($poss);
-    $poss = "'s" if lc($poss) eq "s";
-    print "MATCHED CUP SIZE: '$n$cup$poss'\n pre: '$pre'\n post: '$post'\n" if $trace;
-    return append(transform($pre),tag("cup","$n$cup$poss"),transform($post));
+  if ($str =~ /(3\d)\s*(([BCDEF])\3*)\s*(cup|cups|s|\'s)?/i) {
+    my $pre = $`;
+    my $post = $';
+    my $chest= $1;
+    my $letters = uc($2);
+    my $cupPoss = $4;
+    # printf "letters: '%s'\n",$letters;
+    $cupPoss = "" unless defined($cupPoss);
+    $cupPoss = "'s" if lc($cupPoss) eq "s";
+    $cupPoss = " $cupPoss" if ($cupPoss =~ /cup/);
+    my $result = "$chest$letters$cupPoss";
+    print "MATCHED CUP SIZE: '$result'\n pre: '$pre'\n post: '$post'\n" if $trace;
+    return append(transform($pre),tag("cup",$result),transform($post));
   }
 
   return transformGeneralText($str);
@@ -432,7 +452,7 @@ sub tag {
 
 # sub trace {
 #   my @list = @_;
-#   printf "RETURNING: %s\n",join(" ",@list) if $trace;
+#   printf STDERR "RETURNING: %s\n",join(" ",@list) if $trace;
 #   return @list;
 # }
 
@@ -552,7 +572,10 @@ sub readValidWordsFile {
   open(FILE,$file) or die "Can't read $file";
   while (<FILE>) {
     my ($word,$count) = split;
+    # printf "%s = %d\n",$word,$count if $word eq "disclaimer";
+    next if $count < $minWordCount;
     $validWords{$word}=$count;
+    # printf "valid? %d\n",isValidWord($word) if $word eq "disclaimer";
   }
   close(FILE);
 }
@@ -566,9 +589,9 @@ sub spellfix {
   foreach my $tok (split(' ',$fix)) {
     $validWords{$tok}++;
   }
-  printf "$key being mapped to itself\n" if $key eq $fix;  
+  printf STDERR "$key being mapped to itself\n" if $key eq $fix;  
   my $current = $spellFixKeys{$key};
-  printf "Already have a fix for $key: $current vs. $fix\n" if $current;
+  printf STDERR "Already have a fix for $key: $current vs. $fix\n" if $current;
   $spellFixKeys{$key} = $fix;
   if ($key =~ /\S\s/) {
     $key = join("\\s+",split(' ',$key));
@@ -645,24 +668,61 @@ sub assembleTokens {
   return join("",@final);
 }
 
+sub allValidWords {
+  my @words =@_;
+  foreach my $word (@words) {
+    return 0 if (!isValidWord($word)) 
+  }
+  return 1;
+}
+
 
 sub fixSpelledWords {
   my ($str) = @_;
-  $str =~ s/\b([a-zA-Z]) ([a-zA-Z])(( [a-z])+)\b/$1 . $2 .  remove($3," ")/ge;
-  # $str =~ s/\b([a-zA-Z])_([a-zA-Z])((_[a-zA-z])*)\b/$1 . $2 .  remove($3,"_")/ge;
-  $str = fixSpelledWordsWithSeparator($str," _ ");
-  $str = fixSpelledWordsWithSeparator($str," - ");
-  $str = fixSpelledWordsWithSeparator($str,"  ");
-  $str = fixSpelledWordsWithSeparator($str,"   ");
-  $str = fixSpelledWordsWithSeparator($str," \* ");
+  # printf "ARG: %s\n",$str;
+  # printf "is valid: %d\n",isValidWord("disclaimer");
+  my $letter = "[a-zA-Z']";
+  my $sep    = '[^a-zA-Z\'\d]+';
+  my $digraph = $letter . '{1,2}';
+
+  if ($str =~ /(?<![a-zA-Z\d])$letter($sep$digraph){2,}(?![a-zA-Z\d])/i) {
+
+    my $pre =  $`;
+    my $match = $&;
+    my $post = $';
+
+    # printf "pre: '%s'\nmatch: '%s'\npost: '%s'\n",$pre,$match,$post;
+    $match =~ s/$sep/ /g;
+    my @whiteTokens = split(' ',$match);
+    if (allValidWords(@whiteTokens)) {
+      # printf "BLOCKED(1): $match\n";
+      return fixSpelledWords($pre) . $match . fixSpelledWords($post);
+    }
+    else {
+      # printf "MATCHED: $match\n";
+
+      my @tokens;
+      foreach my $tok (@whiteTokens) {
+	push(@tokens,split(//,$tok));
+      }
+      # printf "tokens: %s\n",join(" ",@tokens);
+      my @words  = findWords(@tokens);
+      if (@words) {
+	$match = join(" ",@words);
+      }
+      return fixSpelledWords($pre) . $match . fixSpelledWords($post);
+    }
+
+  }
   return $str;
 }
 
-sub fixSpelledWordsWithSeparator {
-  my ($str,$sepr) = @_;
-  $str =~ s/\b([a-zA-Z])$sepr([a-zA-Z])(($sepr[a-z])*)\b/$1 . $2 .  remove($3,$sepr)/ge;
-  return $str;
-}
+
+# sub fixSpelledWordsWithSeparator {
+#   my ($str,$sepr) = @_;
+#   $str =~ s/\b([a-zA-Z])$sepr([a-zA-Z])(($sepr[a-z])*)\b/$1 . $2 .  remove($3,$sepr)/ge;
+#   return $str;
+# }
 
 
 sub remove {
@@ -802,7 +862,7 @@ sub transformGeneralText {
       # $line = join(" ",splitOnCharClass($line));
     }
     elsif ($op eq "repeated-chars") {
-      $line = removeRepeatedChars($line);
+      # $line = removeRepeatedChars($line);
     }
     elsif ($op eq "lookup") {
       $line = applySpellFixes($line);
@@ -837,64 +897,107 @@ sub tokenizeAndFixSpelling {
   my ($str) = @_;
   $str = applySpellFixRegexes($str);
   my @result;
-  my $TRACE = 0;
+  my $TRACE = $trace;
   my @working = split(' ',$str);
   while (@working) {
     my $tok = shift(@working);
-    printf "tok: $tok\n" if $TRACE;
-    if (isValidToken($tok)) {
-      printf "Is valid\n" if $TRACE;
-      push(@result,$tok);
+    # If it's spell-mapped, change it regardless of whether it's "valid"
+    if ($spellFixWords{lc($tok)}) {
+      push(@result,split(' ',$spellFixWords{lc($tok)}));
+      next;
     }
-    else {
-      my @exp = splitOnRegularPunctuation($tok);
-      printf "split regular: %s\n",join(" ",@exp) if $TRACE;
-      if ($exp[0] eq $tok) {  # Splitting didn't change it
-	printf "Splitting on regular punct didn't change\n" if $TRACE;
-	my $fixed = fixDuplicateChars($tok);
-	if ($fixed ne $tok) {
-	  printf "Removing duplicate chars changed it: $fixed\n" if $TRACE;
-	  unshift(@working,$fixed);
-	}
-	else {
-	  printf "Removing duplicate chars didn't change\n" if $TRACE;
-	  my $tentative = applyTentativeSpellFixes($tok);
-	  if (isValidToken($tentative)) {
-	    printf "Removing tentative changed it and made it valid: $fixed\n" if $TRACE;
-	    push(@result,$tentative);
-	  }
-	  else {
-	    @exp = lookupSpellFix($tok);
-	    if ($exp[0] eq $tok) {
-	      printf "Spell lookup didn't change it\n" if $TRACE;
-	      @exp = splitOnCharClass($tok);
-	      if ($exp[0] eq $tok) {
-		printf "Splitting on char class didn't change it\n" if $TRACE;
-		push(@result,$tok);
-	      }
-	      else {
-		printf "Splitting on char class changed it\n" if $TRACE;
-		unshift(@working,@exp);
-	      }
-	    }
-	    else {
-	      printf "Spell lookup changed it: %s\n",join(" ",@exp) if $TRACE;
-	      unshift(@working,@exp);
-	    }
-	  }
-	}
+    # Check to see if it's a valid token
+    printf STDERR "tok: $tok\n" if $TRACE;
+    if (isValidToken($tok)) {
+      printf STDERR "Is valid\n" if $TRACE;
+      push(@result,$tok);
+      next;
+    }
+    $tok = lc($tok);
+    # Split on regular punctuation
+    my @exp = splitOnRegularPunctuation($tok);
+    if ($exp[0] ne $tok) {
+      printf STDERR "Splitting on regular punct changed it\n" if $TRACE;
+      unshift(@working,@exp);
+      next;
+    }
+    # Fix duplicate chars
+    printf STDERR "Splitting on regular punct didn't change\n" if $TRACE;
+    my $fixed = fixDuplicateChars($tok);      
+    if ($fixed ne $tok) {
+      printf STDERR "Removing duplicate chars changed it: $fixed\n" if $TRACE;
+      unshift(@working,$fixed);
+      next;
+    }
+    printf STDERR "Removing duplicate chars didn't change\n" if $TRACE;
+    # Tentative spell fixes
+    my $tentative = applyTentativeSpellFixes($tok);
+    if (isValidToken($tentative)) {
+      printf STDERR "Removing tentative changed it and made it valid: $fixed\n" if $TRACE;
+      push(@result,$tentative);
+      next;
+    }
+    # Lookup spell fix
+    @exp = lookupSpellFix($tok);
+    if ($exp[0] ne $tok) {
+      printf STDERR "Look up spell fix changed it\n" if $TRACE;
+      push(@result,@exp);	# assume it's valid
+      next;
+    }
+    printf STDERR "Spell lookup didn't change it\n" if $TRACE;
+    @exp = splitOnCharClass($tok);
+    if ($exp[0] ne $tok) {      
+      printf STDERR "Split on char class changed it\n" if $TRACE;
+      unshift(@working,@exp);
+      next;
+    }
+
+    @exp = findWords(split(//,lc($tok)));
+    if (@exp) {
+      printf STDERR "\nSPELL TREE WORKED: %s => %s\n\n",$tok,join(" ",@exp) if $TRACE;
+      printf STDERR "Spell tree changed it!" if $TRACE;
+      my $correctionProb = getUnigramLogProb(@exp);
+      my $origProb       = getUnigramLogProb($tok);
+      # printf "Prob of orig: %f\n",getUnigramProb($tok);
+
+      my @logProbs;
+      foreach my $w (@exp) {
+	push(@logProbs,getUnigramLogProb($w));
+      }
+      # printf "Probability: %s = %f vs. %s = %s\n",$tok,$origProb,join(" ",@exp),join(" ",@logProbs);
+      if ($correctionProb > $origProb) {
+	# print "It's higher!\n";
+	push(@result,@exp);	# assume it's valid
+	next;
       }
       else {
-	printf "Split on regular punct: %s\n",join(" ",@exp) if $TRACE;
-	unshift(@working,@exp);
+	# printf "It's not higher\n";
       }
     }
+    # All out of tricks. Give up.
+    printf STDERR "Nothing worked. Giving up on this token and will let it through!\n" if $TRACE;
+    push(@result,$tok);
   }
   my $result = join(" ",@result);
   $result = applySpellFixRegexes($result);
   return $result;
 }
 
+sub getUnigramProb {
+  my ($word) = @_;
+  my $prob = $wordProbs{$word};
+  $prob = $singletonProb unless $prob;
+  return $prob;
+}
+
+sub getUnigramLogProb {
+  my @words = @_;
+  my $logProb = 0;
+  foreach my $word (@words) {
+    $logProb += log(getUnigramProb($word));
+  }
+  return $logProb;
+}
 
 sub splitOnRegularPunctuation {
   my ($str) = @_;
@@ -921,6 +1024,7 @@ sub applyTentativeSpellFixes {
   $str =~ s/\@/a/g;
   $str =~ s/\$/s/g;
   $str =~ s/0/o/g;
+  $str =~ s/z/s/ig;
   return $str;
 }
 
@@ -933,37 +1037,52 @@ sub isValidToken {
 }
 
 sub fixDuplicateChars {
-  my ($str) = @_;
-  $str =~ s/azz/ass/g;
+    my ($str) = @_;
+    $str =~ s/azz/ass/g;
+    if (lc($str) eq "www") {
+      return "www";
+    }
+    if ($str =~ /^mm{1,}$/i) {
+	return "mmm";
+    }
+    elsif ($str =~ /^ah{1,}$/i) {
+	return "ahh";
+    }
+    else {
 
-  # Two down to one
-  $str =~ s/([bcdghnpquvwxyz])\1+/$1/g;
-  # Three copies down to two
-  $str =~ s/([a-z])\1\1+/$1$1/g;
-  
-  $str =~ s/oo\b/o/;
+	# Three or more copies down to two for all letters
+	$str =~ s/([a-z])\1\1+/$1$1/ig;
 
-  return $str;
+	# Two down to one for these letters
+	$str =~ s/([bchkpquvwxyz])\1+/$1/ig;
+
+	# Two copies of 'o' down to 1 if at word end
+	$str =~ s/oo\b/o/ig;
+
+	return $str;
+    }
 }
 
-sub fixWord {
-  my ($str) = @_;
-  if ($str =~ /^mmm+$/) {
-    return qw(mmm);
-  }
-  elsif ($str =~ /^ahh+$/) {
-    return qw(ahh);
-  }
-  $str =~ s/azz/ass/g;
-  # Two down to one
-  $str =~ s/([bcdghnpquvwxyz])\1+/$1/g;
-  # Three copies down to two
-  $str =~ s/([a-z])\1\1+/$1$1/g;
-  
-  $str =~ s/oo\b/o/;
+# sub fixWord {
+#   my ($str) = @_;
+#   if ($str =~ /^mmm+$/) {
+#     return qw(mmm);
+#   }
+#   elsif ($str =~ /^ahh+$/) {
+#     return qw(ahh);
+#   }
+#   $str =~ s/azz/ass/g;
 
-  return $str;
-}
+#   # Three copies down to two for all letters
+#   $str =~ s/([a-z])\1\1+/$1$1/g;
+
+#   # Two down to one
+#   $str =~ s/([bcdghnpquvwxyz])\1+/$1/g;
+  
+#   $str =~ s/oo\b/o/;
+
+#   return $str;
+# }
 
 sub isValidWord {
   my ($word) = @_;
@@ -980,11 +1099,11 @@ sub fixUrls {
 }
 
 
-sub NEWfixUrls {
-  my ($str) = @_;
-  $str =~ s/http[\s:\/]*(.*)((com|net|us|mx))/"http:\/\/" . purgeWhiteSpace($1) . $2/ge;
-  return $str;
-}
+# sub NEWfixUrls {
+#   my ($str) = @_;
+#   $str =~ s/http[\s:\/]*(.*)((com|net|us|mx))/"http:\/\/" . purgeWhiteSpace($1) . $2/ge;
+#   return $str;
+# }
 
 sub purgeWhiteSpace {
   my ($str) = @_;
@@ -1058,6 +1177,8 @@ sub applyCapitalizations {
     my $tok = $tokens[$i];
     my $cap = $capitalizedWords{$tok};
     my $prev = $tokens[$i-1];
+    # $cap = "NONE" unless $cap;
+    # printf "tok: $tok $cap\n";
     if ($cap) {
       $tokens[$i] = $cap;
     }
@@ -1065,7 +1186,9 @@ sub applyCapitalizations {
       $tokens[$i] = ucfirst($tok);
     }
   }
+
   $str = join(" ",@tokens);
+  # printf "str: $str\n";
   # Apply capitalization regexes
   foreach my $regex (keys(%capitalizedRegexes)) {
     my $value = $capitalizedRegexes{$regex};
@@ -1084,21 +1207,55 @@ sub readCapitalizationsFile {
     next unless $_;  # Skip blank lines.
     next if /^\#/;   # Skip comment lines
     my $name = $_;
-    printf "Not capitalized: $name\n" unless $name =~ /^[A-Z]/;
+    printf STDERR "Not capitalized: $name\n" unless $name =~ /^[A-Z]/;
     capitalize($name);
   }
   close(INPUT);
 }
 
+sub readCapsDecisionFile {
+    my ($file) = @_;
+    printf STDERR "Reading caps decision file $file\n";
+    open(INPUT,$file) or die "Can't read $file";
+    while (<INPUT>) {
+	my ($word,$decision) = split;
+	next if $capitalizedWords{$word};  # Don't reset if we have already have an entry128
+	# next unless isValidWord($word);
+	next if length($word) == 1;  # Don't do single letters
+	next if ($word eq "no" or $word eq "outcall");
+	my $form = $word;
+	if ($decision eq "up") {
+	    $form = uc($word);
+	    capitalize($form,0);
+	}
+	elsif ($decision eq "cap") {
+	    $form = ucfirst($word);
+	    capitalize($form,0);
+	}
+# 	elsif ($decision eq "low") {
+# 	    $form = lc($word);
+# 	}
+# 	else {
+# 	    die "Cap decision for $word is not up,cap, or low: $decision";
+# 	}
+# 	capitalize($form,0);
+    }
+    close(INPUT);
+}
+
 sub capitalize {
-  my ($name) = @_;
-  foreach my $tok (split(' ',$name)) {
-    $validWords{lc($tok)}++;
+  my ($name,$makeValidWords) = @_;
+  $makeValidWords = 1 unless defined($makeValidWords);
+  if ($makeValidWords) {
+    foreach my $tok (split(' ',$name)) {
+      $validWords{lc($tok)}++;
+    }
   }
   if ($name =~ /^\S+\s+\S+/) {
     my $regex = "\\b$name\\b";
     $capitalizedRegexes{$regex}=$name;
-  } else {
+  } 
+  else {
     my $key = lc($name);
     $capitalizedWords{$key} = $name;    
   }
@@ -1319,4 +1476,194 @@ sub stripNonAlphaNumeric {
   $line =~ s/[\\\/\*\+\^\~\[\]\{\}\<\>\=\"]+/ /g;
   # $line =~ s/[\\\*\+\^\~\[\]\{\}\<\>\=\"]+/ /g;
   return $line;
+}
+
+sub findWords {
+  my @tokens = @_;
+  my $counter = 0;
+  my @states = (makeState(@_));
+  my @successStates;
+  while (@states) {
+    my $state = pop(@states);
+    foreach my $state (expandState($state)) {
+      if (isCompleteState($state)) {
+	push(@successStates,$state) if $state->{SUCCESS};
+      }
+      else {
+	push(@states,$state);
+      }
+    }
+    $counter++;
+  }
+  # printf STDERR "# Success states: %d\n",scalar(@successStates);
+#   foreach my $state (@successStates) {
+#     my $words = $state->{WORDS};
+#     printf STDERR "WORDS: %s\n",join(" ",@$words);;
+#   }
+  my $minLength;
+  my $bestState;
+  my $maxLogProb;
+  foreach my $state (@successStates) {
+    my @words = getStateWords($state);
+
+    my $logProb = 0;
+    foreach my $word (@words) {
+	$logProb += log($wordProbs{$word});
+    }
+    # printf "words: %s logprob: %f\n",join(" ",@words),$logProb; 
+    if (!defined($bestState) or $logProb > $maxLogProb) {
+	$bestState = $state;
+	$maxLogProb = $logProb;
+    }
+    # if (!defined($bestState) or scalar(@words) < $minLength) {
+    #   $bestState = $state;
+    #   $minLength = scalar(@words);
+    # }
+  }
+  if ($bestState) {
+    return getStateWords($bestState);
+  }
+  else {
+    return ();
+  }
+}
+
+
+
+###############################################
+
+# Adds the argument word to the spell tree
+sub addWordToTree {
+  my ($word) = @_;
+  my @letters = split(//,$word);
+  my $cur = $spellTree;
+  foreach my $char (@letters) {
+    my $node = $cur->{$char};
+    if (!defined($node)) {
+      $node = {};
+      $cur->{$char} = $node;
+    }
+    $cur = $node;
+  }
+  $cur->{WORD} = $word;
+}
+
+sub lookupWordInTree {
+  my ($word) = @_;
+  my @letters = split(//,$word);
+  my $cur = $spellTree;
+  foreach my $char (@letters) {
+    my $node = $cur->{$char};
+    if (!defined($node)) {
+      return undef();
+    }
+    $cur = $node;
+  }
+  return $cur->{WORD};
+}
+
+
+
+sub makeState {
+  my @letters = @_;
+  my $state       = {};
+  $state->{POS}   = 0;
+  $state->{NODE}  = $spellTree;
+  $state->{INPUT} = \@letters;
+  $state->{WORDS} = [];
+  # $state->{NUM}   = $NUM_STATES++;
+  return $state;
+}
+
+sub copyState {
+  my ($state) = @_;
+  my $copy = {};
+  $copy->{PARENT} = $state;
+  $copy->{INPUT}  = $state->{INPUT};
+  $copy->{POS}    = $state->{POS};
+  $copy->{NODE}   = $state->{NODE};
+  # $copy->{NUM}    = $NUM_STATES++;
+  my $words = $state->{WORDS};
+  die "no words" unless defined($state->{WORDS});
+  my @words = @$words;
+  $copy->{WORDS} = \@words;
+  return $copy;
+}
+
+sub getStateWords {
+  my ($state) = @_;
+  my $words = $state->{WORDS};
+  return @$words;
+}
+
+
+sub expandState {
+  my ($state) = @_;
+  die "Don't try to expand a completed state" if isCompleteState($state);
+  my $pos  = $state->{POS};
+  my $char = $state->{INPUT}->[$pos];
+  # printf STDERR "Expanding state %d pos: %d letter: %s\n",$state->{NUM},$pos,$char;
+  my $nextNode = $state->{NODE}->{$char};
+  if (!defined($nextNode)) {
+    $state->{FAILED} = 1;
+    return ();
+  }
+  else {
+    # printf STDERR "Found a node for %s\n",$char;
+    my $nextState = copyState($state);
+    $nextState->{POS}++;
+    $nextState->{NODE} = $nextNode;
+
+    if (defined($nextNode->{WORD})) {
+      my $word     = $nextNode->{WORD};
+      # printf STDERR "found a word: %s\n",$word;
+      push(@{$nextState->{WORDS}},$word);
+      if (isCompleteState($nextState)) {
+	my $words = $nextState->{WORDS};
+	# printf STDERR "and we're complete: %s\n",join(" ",@$words);
+	$nextState->{SUCCESS} = 1;
+	return ($nextState);
+      }
+      else {
+	# Reset the new state's node back to the tree root
+	$nextState->{NODE} = $spellTree;
+	# Make an alternative continuation state that will look for a different word than this one
+	my $continue = copyState($state);
+	$continue->{POS}++;
+	$continue->{NODE} = $nextNode;
+	return($continue,$nextState);
+      }
+    }
+    else {
+      return ($nextState);
+    }
+  }  
+}
+
+
+sub isCompleteState {
+  my ($state) = @_;
+  my $length = scalar(@{$state->{INPUT}});
+  return ($state->{POS} >= $length);
+}
+
+sub buildSpellTree {
+  printf STDERR "Building spell tree...\n";
+  my $totalWordCount = 0;
+  my $singletons = 0;
+  foreach my $count (values(%validWords)) {
+    $totalWordCount += $count;
+    $singletons++ if $count == 1;
+  }
+  # $singletonProb = $singletons/$totalWordCount;
+  $singletonProb = 1/$totalWordCount;
+  # printf "Singleton prob: %s\n",$singletonProb;
+  foreach my $word (keys(%validWords)) {
+    if (length($word) > 1 or $word eq "a") {
+      addWordToTree($word);
+    }
+    # addWordToTree($word);
+    $wordProbs{$word} = $validWords{$word}/$totalWordCount;
+  }
+  printf STDERR "Done\n";
 }
