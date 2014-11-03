@@ -73,7 +73,7 @@ die $usage if $usageRequested;
 
 $spellfixFiles = "$dataFilesDir/spellfixes.txt" if !$spellfixFiles and $dataFilesDir;
 $capitalFormsFiles = "$dataFilesDir/capitalize.txt" if !$capitalFormsFiles and $dataFilesDir;
-$capsDecisionFile  = "$dataFilesDir/caps.decisions";
+$capsDecisionFile  = "$dataFilesDir/caps.decisions" if $dataFilesDir;
 $validWordsFile = "$dataFilesDir/valid-vocab.word-counts" if !$validWordsFile and $dataFilesDir;
 
 # Get the input and output files
@@ -103,14 +103,17 @@ my %spellFixKeys;
 my $spellTree = {};
 
 
-# Spell fix list is inserted under the line below. Do NOT remove!
-# ++SPELLFIXES++
 
 # Vocabulary list
 # ++VOCAB++
 
 # Capitalization list is inserted the line below. Do NOT remove!
 # ++CAPITALIZE++
+
+# Spell fix list is inserted under the line below. Do NOT remove!
+# ++SPELLFIXES++
+
+
 
 readValidWordsFile($validWordsFile) if $validWordsFile;
 
@@ -955,7 +958,7 @@ sub tokenizeAndFixSpelling {
     @exp = findWords(split(//,lc($tok)));
     if (@exp) {
       printf STDERR "\nSPELL TREE WORKED: %s => %s\n\n",$tok,join(" ",@exp) if $TRACE;
-      printf STDERR "Spell tree changed it!" if $TRACE;
+      # printf STDERR "Spell tree changed it!" if $TRACE;
       my $correctionProb = getUnigramLogProb(@exp);
       my $origProb       = getUnigramLogProb($tok);
       # printf "Prob of orig: %f\n",getUnigramProb($tok);
@@ -964,14 +967,14 @@ sub tokenizeAndFixSpelling {
       foreach my $w (@exp) {
 	push(@logProbs,getUnigramLogProb($w));
       }
-      # printf "Probability: %s = %f vs. %s = %s\n",$tok,$origProb,join(" ",@exp),join(" ",@logProbs);
+      printf "Probability: %s = %f vs. %s = %s\n",$tok,$origProb,join(" ",@exp),join(" ",@logProbs) if $TRACE;
       if ($correctionProb > $origProb) {
-	# print "It's higher!\n";
+	print "And it's higher!\n" if $TRACE;
 	push(@result,@exp);	# assume it's valid
 	next;
       }
       else {
-	# printf "It's not higher\n";
+	printf "But it's not higher\n" if $TRACE;
       }
     }
     # All out of tricks. Give up.
@@ -1083,6 +1086,17 @@ sub fixDuplicateChars {
 
 #   return $str;
 # }
+
+
+# sub validWord {
+#   my ($word) = @_;
+#   $validWords{$word} = 1 unless $validWords{$word};
+# }
+
+sub setWordCount {
+  my ($word,$count) = @_;
+  $validWords{$word} = $count;
+}
 
 sub isValidWord {
   my ($word) = @_;
@@ -1657,7 +1671,8 @@ sub buildSpellTree {
   }
   # $singletonProb = $singletons/$totalWordCount;
   $singletonProb = 1/$totalWordCount;
-  # printf "Singleton prob: %s\n",$singletonProb;
+  printf "Total word count: %d\n",$totalWordCount;
+  printf "Singleton prob: %s\n",$singletonProb;
   foreach my $word (keys(%validWords)) {
     if (length($word) > 1 or $word eq "a") {
       addWordToTree($word);

@@ -58,7 +58,8 @@ while (<INPUT>) {
     printf OUTPUT "\n";
     foreach my $file (@spellFixFiles) {
       foreach my $line (readFile($file)) {
-	printf OUTPUT "spellfix(\"%s\");\n",$line;
+	$line =~ s/'/\\'/g;
+	printf OUTPUT "spellfix('%s');\n",$line;
       }
     }
     $spellFixesDone = 1;
@@ -76,7 +77,7 @@ while (<INPUT>) {
     printf OUTPUT "\n";
     foreach my $line (readFile($vocabFile)) {
       my ($word,$count) = split(' ',$line);
-      printf OUTPUT "validWord(\"%s\",%d);\n",$word,$count;
+      printf OUTPUT "setWordCount(\"%s\",%d);\n",$word,$count;
     }
     $wordsDone = 1;
   }
@@ -92,6 +93,7 @@ die "Did not find '# ++VOCAB++' in input script $inputScript" unless $wordsDone;
 
 sub readFile {
   my ($file) = @_;
+  printf "Reading $file\n";
   my @lines;
   open(FILE,$file) or die "Can't read $file";
   while (<FILE>) {
