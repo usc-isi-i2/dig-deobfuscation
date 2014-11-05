@@ -21263,8 +21263,8 @@ sub buildSpellTree {
   }
   # $singletonProb = $singletons/$totalWordCount;
   $singletonProb = 1/$totalWordCount;
-  printf "Total word count: %d\n",$totalWordCount;
-  printf "Singleton prob: %s\n",$singletonProb;
+  printf STDERR "Total word count: %d\n",$totalWordCount;
+  printf STDERR "Singleton prob: %s\n",$singletonProb;
   foreach my $word (keys(%validWords)) {
     if (length($word) > 1 or $word eq "a") {
       addWordToTree($word);
