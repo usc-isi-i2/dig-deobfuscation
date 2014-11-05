@@ -19757,12 +19757,14 @@ while (<$inputHandle>) {
     # Get the key (URI) and content
     my ($uri,$content)  = split('\t',$line,2);
     die "Bad line: $_" unless defined($content);
-    $line = unencodeString($content);
+    $line = decodeJSONString($content);
     # Output the key and tab separator as the first thing on the line.
     printf $outputHandle "%s\t",$uri;  
   }
+  my $transformed = transformCompleteMessage($line);
+  $transformed = encodeJSONString($transformed) if $keyMode;
   # Output the deobfuscated content.
-  printf $outputHandle "%s\n",transformCompleteMessage($line);
+  printf $outputHandle "%s\n",$transformed;
   # Output an additional line break for readability if requested.  Note this will break some follow-on scripts.
   printf $outputHandle "\n" if $addLineBreaks;
   # Pacifier/progress indicator
@@ -19985,8 +19987,8 @@ sub transformSemantic {
     my ($pre,$post) = ($`,$');
     return append(transform($pre),tag("A+","A+"),transform($post));
   }
-  # Cup size
-  if ($str =~ /(3\d)\s*(([BCDEF])\3*)\s*(cup|cups|s|\'s)?/i) {
+  # Cup size with an indicator, directly adjacent or not
+  if ($str =~ /([34]\d)\s*(([BCDEF])\3*)\s*(cup size|cupsize|cups|cup|s|\'s)/i) {
     my $pre = $`;
     my $post = $';
     my $chest= $1;
@@ -19997,7 +19999,17 @@ sub transformSemantic {
     $cupPoss = "'s" if lc($cupPoss) eq "s";
     $cupPoss = " $cupPoss" if ($cupPoss =~ /cup/);
     my $result = "$chest$letters$cupPoss";
-    print "MATCHED CUP SIZE: '$result'\n pre: '$pre'\n post: '$post'\n" if $trace;
+    print "MATCHED CUP SIZE (1): '$result'\n pre: '$pre'\n post: '$post'\n" if $trace;
+    return append(transform($pre),tag("cup",$result),transform($post));
+  }
+  if ($str =~ /([34]\d)\s*(([BCDEF])\3*)(?![a-zA-Z])/i) {
+    my $pre = $`;
+    my $post = $';
+    my $chest= $1;
+    my $letters = uc($2);
+    # printf "letters: '%s'\n",$letters;
+    my $result = "$chest$letters";
+    print "MATCHED CUP SIZE (2): '$result'\n pre: '$pre'\n post: '$post'\n" if $trace;
     return append(transform($pre),tag("cup",$result),transform($post));
   }
 
@@ -20028,8 +20040,20 @@ sub tag {
 # }
 
 
-sub unencodeString {
+sub encodeJSONString {
   my ($str) = @_;
+  $str =~ s/\n/\\n/g;
+  $str =~ s/\t/\\t/g;
+  $str =~ s/\r/\\r/g;
+  $str =~ s/\"/\\"/g;
+  $str = '"' . $str . '"';
+  return $str;
+}
+
+sub decodeJSONString {
+  my ($str) = @_;
+  $str =~ s/^\"//;
+  $str =~ s/\"$//;
   $str =~ s/\\n/ /g;
   $str =~ s/\\t/ /g;
   $str =~ s/\\r/ /g;
