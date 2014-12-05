@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 use Getopt::Long;
-
+use POSIX qw(strftime);
 
 $| = 1;
 
@@ -36,7 +36,10 @@ my $keyMode;
 my $operations = "all";
 my $minWordCount = 1;
 
+my $jsonObjectOutputMode;
+my $uriLabel;
 
+my $timestamp = strftime "%Y-%m-%d %H-%M-%S", gmtime;
 
 # Took out letter-digit as doing that gained 0.3
 my $allOperations = "downcase,html,non-ascii,initial-punct,pre-tokenize,tokenize,non-alphanumeric,ellipsis,repeated-sentence-end,repeated-punct,repeated-chars,phone-numbers,fix-emails,fix-urls,spelled-words,lookup,capitalize,final-replacements,cosmetic,std-whitespace";
@@ -63,6 +66,9 @@ GetOptions("operations:s" => \$operations,
 	   "tags" => \$useTags,
 	   "validwords:s" => \$validWordsFile,
 	   "minwordcount:i" => \$minWordCount,
+	   # philpot
+	   "jsonObjectOutputMode" => \$jsonObjectOutputMode,
+	   "uriLabel:s" => \$uriLabel
 	   );
 
 # Quit early if -help or -usage are present in the arugments list.
@@ -75,6 +81,8 @@ $spellfixFiles = "$dataFilesDir/spellfixes.txt" if !$spellfixFiles and $dataFile
 $capitalFormsFiles = "$dataFilesDir/capitalize.txt" if !$capitalFormsFiles and $dataFilesDir;
 $capsDecisionFile  = "$dataFilesDir/caps.decisions" if $dataFilesDir;
 $validWordsFile = "$dataFilesDir/valid-vocab.word-counts" if !$validWordsFile and $dataFilesDir;
+
+$uriLabel = "title_uri" if !$uriLabel;
 
 # Get the input and output files
 
@@ -19747,26 +19755,37 @@ else {
 printf STDERR "\nPROCESSING INPUT...\n\n";
 
 
+my $uri;
+my $content;
 my $lineNum = 1;
 while (<$inputHandle>) {
   s/^\s+//;
   s/\s+$//;
   next unless $_;  # Ignore blank lines
   my $line = $_;
-  if ($keyMode) {
+  if ($keyMode || $jsonObjectOutputMode) {
     # Get the key (URI) and content
-    my ($uri,$content)  = split('\t',$line,2);
+    ($uri,$content)  = split('\t',$line,2);
     die "Bad line: $_" unless defined($content);
     $line = decodeJSONString($content);
+  }
+  if ($keyMode) {
     # Output the key and tab separator as the first thing on the line.
     printf $outputHandle "%s\t",$uri;  
   }
   my $transformed = transformCompleteMessage($line);
-  $transformed = encodeJSONString($transformed) if $keyMode;
-  # Output the deobfuscated content.
-  printf $outputHandle "%s\n",$transformed;
-  # Output an additional line break for readability if requested.  Note this will break some follow-on scripts.
-  printf $outputHandle "\n" if $addLineBreaks;
+  $transformed = encodeJSONString($transformed) if $keyMode || $jsonObjectOutputMode;
+  if ($jsonObjectOutputMode) {
+     # trim
+     $uri =~ s/^\s+|\s+$//;
+     printf $outputHandle qq{{"$uriLabel": "$uri", "clean_body": %s, "gentime": "$timestamp"}\n}, $transformed;
+  }
+  else {
+     # Output the deobfuscated content.
+     printf $outputHandle "%s\n",$transformed;
+     # Output an additional line break for readability if requested.  Note this will break some follow-on scripts.
+     printf $outputHandle "\n" if $addLineBreaks;
+  }
   # Pacifier/progress indicator
   printf STDERR "%d\n", $lineNum if ($lineNum%1000 == 0);
   last if defined($maxLines) and $lineNum == $maxLines;
