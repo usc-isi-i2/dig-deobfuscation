@@ -41,10 +41,11 @@ my $minWordCount = 1;
 
 my $jsonPayload;
 my $uriLabel;
+my $uriSuffix;
 my $textPath;
 my $outputField;
 
-my $timestamp = strftime "%Y-%m-%d %H-%M-%S", gmtime;
+my $timestamp = strftime "%Y-%m-%d %H:%M:%S", gmtime;
 
 # Took out letter-digit as doing that gained 0.3
 my $allOperations = "downcase,html,non-ascii,initial-punct,pre-tokenize,tokenize,non-alphanumeric,ellipsis,repeated-sentence-end,repeated-punct,repeated-chars,phone-numbers,fix-emails,fix-urls,spelled-words,lookup,capitalize,final-replacements,cosmetic,std-whitespace";
@@ -72,6 +73,7 @@ GetOptions("operations:s" => \$operations,
 	   # philpot
 	   "jsonPayload" => \$jsonPayload,
 	   "uriLabel:s" => \$uriLabel,
+	   "uriSuffix:s" => \$uriSuffix,
 	   "textPath:s" => \$textPath,
 	   "outputField:s" => \$outputField
 	   );
@@ -88,6 +90,7 @@ $capsDecisionFile  = "$dataFilesDir/caps.decisions" if $dataFilesDir;
 $validWordsFile = "$dataFilesDir/valid-vocab.word-counts" if !$validWordsFile and $dataFilesDir;
 
 $uriLabel = "title_uri" if !$uriLabel;
+$uriSuffix = "/title" if !$uriSuffix;
 $textPath = '$.hasTitlePart.text' if !$textPath;
 my $textPathGetter = JSON::Path->new($textPath);
 $outputField = 'clean_title' if !$outputField;
@@ -19798,7 +19801,7 @@ while (<$inputHandle>) {
      $uri =~ s/^\s+|\s+$//;
      $content->{$outputField} = $transformed;
      $content->{"gentime"} = $timestamp;
-     $content->{$uriLabel} = $uri;
+     $content->{$uriLabel} = "$uri$uriSuffix";
      my $json_text = to_json( $content, { ascii => 1, pretty => 0 } );
      printf $outputHandle "%s", $json_text;
      printf $outputHandle "\n";
