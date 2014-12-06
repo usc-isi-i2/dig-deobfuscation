@@ -2,6 +2,9 @@ use strict;
 use warnings;
 use Getopt::Long;
 use POSIX qw(strftime);
+use JSON;
+use JSON::Path;
+use Data::Dumper;
 
 $| = 1;
 
@@ -36,8 +39,10 @@ my $keyMode;
 my $operations = "all";
 my $minWordCount = 1;
 
-my $jsonObjectOutputMode;
+my $jsonPayload;
 my $uriLabel;
+my $textPath;
+my $outputField;
 
 my $timestamp = strftime "%Y-%m-%d %H-%M-%S", gmtime;
 
@@ -49,8 +54,6 @@ my @allOperations = split(/\,/,$allOperations);
 my @contractions = qw(i'm i'll i'd i've you're you'll);
 
 # Default is all operations
-
-
 
 GetOptions("operations:s" => \$operations,
 	   "showOps" => \$showOps,
@@ -67,8 +70,10 @@ GetOptions("operations:s" => \$operations,
 	   "validwords:s" => \$validWordsFile,
 	   "minwordcount:i" => \$minWordCount,
 	   # philpot
-	   "jsonObjectOutputMode" => \$jsonObjectOutputMode,
-	   "uriLabel:s" => \$uriLabel
+	   "jsonPayload" => \$jsonPayload,
+	   "uriLabel:s" => \$uriLabel,
+	   "textPath:s" => \$textPath,
+	   "outputField:s" => \$outputField
 	   );
 
 # Quit early if -help or -usage are present in the arugments list.
@@ -83,6 +88,9 @@ $capsDecisionFile  = "$dataFilesDir/caps.decisions" if $dataFilesDir;
 $validWordsFile = "$dataFilesDir/valid-vocab.word-counts" if !$validWordsFile and $dataFilesDir;
 
 $uriLabel = "title_uri" if !$uriLabel;
+$textPath = '$.hasTitlePart.text' if !$textPath;
+my $textPathGetter = JSON::Path->new($textPath);
+$outputField = 'clean_title' if !$outputField;
 
 # Get the input and output files
 
@@ -189,28 +197,43 @@ printf STDERR "\nPROCESSING INPUT...\n\n";
 
 my $uri;
 my $content;
+my $payload;
+my $text;
 my $lineNum = 1;
 while (<$inputHandle>) {
   s/^\s+//;
   s/\s+$//;
   next unless $_;  # Ignore blank lines
   my $line = $_;
-  if ($keyMode || $jsonObjectOutputMode) {
+  $text = $line;
+  if ($keyMode) {
     # Get the key (URI) and content
     ($uri,$content)  = split('\t',$line,2);
     die "Bad line: $_" unless defined($content);
-    $line = decodeJSONString($content);
+    $text = decodeJSONString($content);
+  }
+  if ($jsonPayload) {
+    # Get the key (URI) and json payload
+    ($uri,$payload)  = split('\t',$line,2);
+    die "Bad line: $_" unless defined($payload);
+    $content = decode_json($payload);
+    $text = $textPathGetter->value($content);
   }
   if ($keyMode) {
     # Output the key and tab separator as the first thing on the line.
     printf $outputHandle "%s\t",$uri;  
   }
-  my $transformed = transformCompleteMessage($line);
-  $transformed = encodeJSONString($transformed) if $keyMode || $jsonObjectOutputMode;
-  if ($jsonObjectOutputMode) {
+  my $transformed = transformCompleteMessage($text);
+  $transformed = encodeJSONString($transformed) if $keyMode;
+  if ($jsonPayload) {
      # trim
      $uri =~ s/^\s+|\s+$//;
-     printf $outputHandle qq{{"$uriLabel": "$uri", "clean_body": %s, "gentime": "$timestamp"}\n}, $transformed;
+     $content->{$outputField} = $transformed;
+     $content->{"gentime"} = $timestamp;
+     $content->{$uriLabel} = $uri;
+     my $json_text = to_json( $content, { ascii => 1, pretty => 0 } );
+     printf $outputHandle "%s", $json_text;
+     printf $outputHandle "\n";
   }
   else {
      # Output the deobfuscated content.
