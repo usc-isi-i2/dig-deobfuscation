@@ -19790,7 +19790,7 @@ while (<$inputHandle>) {
     $content = decode_json($payload);
     $text = $textPathGetter->value($content);
   }
-  if ($keyMode) {
+  if ($keyMode || $jsonPayload) {
     # Output the key and tab separator as the first thing on the line.
     printf $outputHandle "%s\t",$uri;  
   }
